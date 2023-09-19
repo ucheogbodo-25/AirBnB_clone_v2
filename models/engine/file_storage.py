@@ -1,90 +1,70 @@
 #!/usr/bin/python3
-"""This module defines a class to manage database storage for hbnb clone"""
-import os
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, scoped_session
-import urllib.parse
-
-from models.base_model import BaseModel, Base
-from models.state import State
-from models.city import City
-from models.user import User
-from models.place import Place, place_amenity
+"""Defines the FileStorage class."""
+import json
+from models.base_model import BaseModel
 from models.amenity import Amenity
+from models.city import City
+from models.place import Place
 from models.review import Review
+from models.state import State
+from models.user import User
 
 
-class DBStorage:
-    """This class manages storage of hbnb models in a SQL database"""
-    __engine = None
-    __session = None
+class FileStorage:
+    """Represent an abstracted storage engine.
 
-    def __init__(self):
-        """Initializes the SQL database storage"""
-        user = os.getenv('HBNB_MYSQL_USER')
-        pword = os.getenv('HBNB_MYSQL_PWD')
-        host = os.getenv('HBNB_MYSQL_HOST')
-        db_name = os.getenv('HBNB_MYSQL_DB')
-        env = os.getenv('HBNB_ENV')
-        DATABASE_URL = "mysql+mysqldb://{}:{}@{}:3306/{}".format(
-            user, pword, host, db_name
-        )
-        self.__engine = create_engine(
-            DATABASE_URL,
-            pool_pre_ping=True
-        )
-        if env == 'test':
-            Base.metadata.drop_all(self.__engine)
+    Attributes:
+        __file_path (str): The name of the file to save objects to.
+        __objects (dict): A dictionary of instantiated objects.
+    """
+
+    __file_path = "file.json"
+    __objects = {}
 
     def all(self, cls=None):
-        """Returns a dictionary of models currently in storage"""
-        objects = dict()
-        all_classes = (User, State, City, Amenity, Place, Review)
-        if cls is None:
-            for class_type in all_classes:
-                query = self.__session.query(class_type)
-                for obj in query.all():
-                    obj_key = '{}.{}'.format(obj.__class__.__name__, obj.id)
-                    objects[obj_key] = obj
-        else:
-            query = self.__session.query(cls)
-            for obj in query.all():
-                obj_key = '{}.{}'.format(obj.__class__.__name__, obj.id)
-                objects[obj_key] = obj
-        return objects
+        """Return a dictionary of instantiated objects in __objects.
 
-    def delete(self, obj=None):
-        """Removes an object from the storage database"""
-        if obj is not None:
-            self.__session.query(type(obj)).filter(
-                type(obj).id == obj.id).delete(
-                synchronize_session=False
-            )
+        If a cls is specified, returns a dictionary of objects of that type.
+        Otherwise, returns the __objects dictionary.
+        """
+        if cls is not None:
+            if type(cls) == str:
+                cls = eval(cls)
+            cls_dict = {}
+            for k, v in self.__objects.items():
+                if type(v) == cls:
+                    cls_dict[k] = v
+            return cls_dict
+        return self.__objects
 
     def new(self, obj):
-        """Adds new object to storage database"""
-        if obj is not None:
-            try:
-                self.__session.add(obj)
-                self.__session.flush()
-                self.__session.refresh(obj)
-            except Exception as ex:
-                self.__session.rollback()
-                raise ex
+        """Set in __objects obj with key <obj_class_name>.id."""
+        self.__objects["{}.{}".format(type(obj).__name__, obj.id)] = obj
 
     def save(self):
-        """Commits the session changes to database"""
-        self.__session.commit()
+        """Serialize __objects to the JSON file __file_path."""
+        odict = {o: self.__objects[o].to_dict() for o in self.__objects.keys()}
+        with open(self.__file_path, "w", encoding="utf-8") as f:
+            json.dump(odict, f)
 
     def reload(self):
-        """Loads storage database"""
-        Base.metadata.create_all(self.__engine)
-        SessionFactory = sessionmaker(
-            bind=self.__engine,
-            expire_on_commit=False
-        )
-        self.__session = scoped_session(SessionFactory)()
+        """Deserialize the JSON file __file_path to __objects, if it exists."""
+        try:
+            with open(self.__file_path, "r", encoding="utf-8") as f:
+                for o in json.load(f).values():
+                    name = o["__class__"]
+                    del o["__class__"]
+                    self.new(eval(name)(**o))
+        except FileNotFoundError:
+            pass
+
+    def delete(self, obj=None):
+        """Delete a given object from __objects, if it exists."""
+        try:
+            del self.__objects["{}.{}".format(type(obj).__name__, obj.id)]
+        except (AttributeError, KeyError):
+            pass
 
     def close(self):
-        """Closes the storage engine."""
-        self.__session.close()
+        """Call the reload method."""
+        self.reload()
